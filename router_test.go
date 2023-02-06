@@ -1,8 +1,11 @@
 package router
 
 import (
+	"github.com/gowool/wool"
+	"golang.org/x/exp/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -624,4 +627,55 @@ func BenchmarkGinParseAPI(b *testing.B) {
 	g := gin.New()
 	loadGinRoutes(g, parseAPI)
 	benchmarkRoutes(b, g, parseAPI)
+}
+
+func loadWoolRoutes(w *wool.Wool, routes []*Route) {
+	for _, r := range routes {
+		switch r.Method {
+		case "GET":
+			w.GET(r.Path, woolHandler(r.Method, r.Path))
+		case "POST":
+			w.POST(r.Path, woolHandler(r.Method, r.Path))
+		case "PATCH":
+			w.PATCH(r.Path, woolHandler(r.Method, r.Path))
+		case "PUT":
+			w.PUT(r.Path, woolHandler(r.Method, r.Path))
+		case "DELETE":
+			w.DELETE(r.Path, woolHandler(r.Method, r.Path))
+		}
+	}
+}
+
+func woolHandler(method, path string) wool.Handler {
+	return func(c wool.Ctx) error {
+		return c.String(http.StatusOK, "OK")
+	}
+}
+
+func init() {
+	wool.SetLogger(slog.New((slog.HandlerOptions{Level: slog.LevelError}).NewJSONHandler(os.Stdout)))
+}
+
+func BenchmarkWoolStatic(b *testing.B) {
+	w := wool.New()
+	loadWoolRoutes(w, static)
+	benchmarkRoutes(b, w, static)
+}
+
+func BenchmarkWoolGitHubAPI(b *testing.B) {
+	w := wool.New()
+	loadWoolRoutes(w, githubAPI)
+	benchmarkRoutes(b, w, githubAPI)
+}
+
+func BenchmarkWoolGplusAPI(b *testing.B) {
+	w := wool.New()
+	loadWoolRoutes(w, gplusAPI)
+	benchmarkRoutes(b, w, gplusAPI)
+}
+
+func BenchmarkWoolParseAPI(b *testing.B) {
+	w := wool.New()
+	loadWoolRoutes(w, parseAPI)
+	benchmarkRoutes(b, w, parseAPI)
 }
