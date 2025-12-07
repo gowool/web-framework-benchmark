@@ -1,12 +1,13 @@
 package router
 
 import (
-	"github.com/gowool/wool"
-	"golang.org/x/exp/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"regexp"
+	"sync"
 	"testing"
+
+	"github.com/gowool/wo"
 
 	"github.com/gin-gonic/gin"
 	"github.com/labstack/echo/v4"
@@ -509,12 +510,7 @@ var (
 		// Cloud Functions
 		{"POST", "/1/functions"},
 	}
-
-	apis = [][]*Route{githubAPI, gplusAPI, parseAPI}
 )
-
-func testRoutes() {
-}
 
 func benchmarkRoutes(b *testing.B, router http.Handler, routes []*Route) {
 	b.ReportAllocs()
@@ -560,23 +556,23 @@ func BenchmarkEchoStatic(b *testing.B) {
 	benchmarkRoutes(b, e, static)
 }
 
-func BenchmarkEchoGitHubAPI(b *testing.B) {
-	e := echo.New()
-	loadEchoRoutes(e, githubAPI)
-	benchmarkRoutes(b, e, githubAPI)
-}
-
-func BenchmarkEchoGplusAPI(b *testing.B) {
-	e := echo.New()
-	loadEchoRoutes(e, gplusAPI)
-	benchmarkRoutes(b, e, gplusAPI)
-}
-
-func BenchmarkEchoParseAPI(b *testing.B) {
-	e := echo.New()
-	loadEchoRoutes(e, parseAPI)
-	benchmarkRoutes(b, e, parseAPI)
-}
+//func BenchmarkEchoGitHubAPI(b *testing.B) {
+//	e := echo.New()
+//	loadEchoRoutes(e, githubAPI)
+//	benchmarkRoutes(b, e, githubAPI)
+//}
+//
+//func BenchmarkEchoGplusAPI(b *testing.B) {
+//	e := echo.New()
+//	loadEchoRoutes(e, gplusAPI)
+//	benchmarkRoutes(b, e, gplusAPI)
+//}
+//
+//func BenchmarkEchoParseAPI(b *testing.B) {
+//	e := echo.New()
+//	loadEchoRoutes(e, parseAPI)
+//	benchmarkRoutes(b, e, parseAPI)
+//}
 
 func loadGinRoutes(g *gin.Engine, routes []*Route) {
 	for _, r := range routes {
@@ -608,74 +604,121 @@ func BenchmarkGinStatic(b *testing.B) {
 	benchmarkRoutes(b, g, static)
 }
 
-func BenchmarkGinGitHubAPI(b *testing.B) {
-	gin.SetMode(gin.ReleaseMode)
-	g := gin.New()
-	loadGinRoutes(g, githubAPI)
-	benchmarkRoutes(b, g, githubAPI)
-}
+//func BenchmarkGinGitHubAPI(b *testing.B) {
+//	gin.SetMode(gin.ReleaseMode)
+//	g := gin.New()
+//	loadGinRoutes(g, githubAPI)
+//	benchmarkRoutes(b, g, githubAPI)
+//}
+//
+//func BenchmarkGinGplusAPI(b *testing.B) {
+//	gin.SetMode(gin.ReleaseMode)
+//	g := gin.New()
+//	loadGinRoutes(g, gplusAPI)
+//	benchmarkRoutes(b, g, gplusAPI)
+//}
+//
+//func BenchmarkGinParseAPI(b *testing.B) {
+//	gin.SetMode(gin.ReleaseMode)
+//	g := gin.New()
+//	loadGinRoutes(g, parseAPI)
+//	benchmarkRoutes(b, g, parseAPI)
+//}
 
-func BenchmarkGinGplusAPI(b *testing.B) {
-	gin.SetMode(gin.ReleaseMode)
-	g := gin.New()
-	loadGinRoutes(g, gplusAPI)
-	benchmarkRoutes(b, g, gplusAPI)
-}
+func eventFactoryFunc() wo.EventFactoryFunc[*wo.Event] {
+	pool := sync.Pool{New: func() any { return new(wo.Event) }}
 
-func BenchmarkGinParseAPI(b *testing.B) {
-	gin.SetMode(gin.ReleaseMode)
-	g := gin.New()
-	loadGinRoutes(g, parseAPI)
-	benchmarkRoutes(b, g, parseAPI)
-}
+	return func(w *wo.Response, r *http.Request) (*wo.Event, wo.EventCleanupFunc) {
+		e := pool.Get().(*wo.Event)
+		e.Reset(w, r)
 
-func loadWoolRoutes(w *wool.Wool, routes []*Route) {
-	for _, r := range routes {
-		switch r.Method {
-		case "GET":
-			w.GET(r.Path, woolHandler(r.Method, r.Path))
-		case "POST":
-			w.POST(r.Path, woolHandler(r.Method, r.Path))
-		case "PATCH":
-			w.PATCH(r.Path, woolHandler(r.Method, r.Path))
-		case "PUT":
-			w.PUT(r.Path, woolHandler(r.Method, r.Path))
-		case "DELETE":
-			w.DELETE(r.Path, woolHandler(r.Method, r.Path))
+		return e, func() {
+			e.Reset(nil, nil)
+			pool.Put(e)
 		}
 	}
 }
 
-func woolHandler(method, path string) wool.Handler {
-	return func(c wool.Ctx) error {
+var re = regexp.MustCompile(`:([a-zA-Z0-9_]+)`)
+
+func loadWORoutes(router *wo.Router[*wo.Event], routes []*Route) {
+	for _, r := range routes {
+		p := re.ReplaceAllString(r.Path, `{$1}`)
+
+		switch r.Method {
+		case "GET":
+			router.GET(p, woHandler(r.Method, p))
+		case "POST":
+			router.POST(p, woHandler(r.Method, p))
+		case "PATCH":
+			router.PATCH(p, woHandler(r.Method, p))
+		case "PUT":
+			router.PUT(p, woHandler(r.Method, p))
+		case "DELETE":
+			router.DELETE(p, woHandler(r.Method, p))
+		}
+	}
+}
+
+func woHandler(method, path string) func(*wo.Event) error {
+	return func(c *wo.Event) error {
 		return c.String(http.StatusOK, "OK")
 	}
 }
 
-func init() {
-	wool.SetLogger(slog.New((slog.HandlerOptions{Level: slog.LevelError}).NewJSONHandler(os.Stdout)))
+func BenchmarkWOStatic(b *testing.B) {
+	router := wo.New(eventFactoryFunc(), wo.ErrorHandler[*wo.Event](nil, nil, nil))
+	loadWORoutes(router, static)
+	mux, _ := router.BuildMux()
+	benchmarkRoutes(b, mux, static)
 }
 
-func BenchmarkWoolStatic(b *testing.B) {
-	w := wool.New()
-	loadWoolRoutes(w, static)
-	benchmarkRoutes(b, w, static)
+//func BenchmarkWOGitHubAPI(b *testing.B) {
+//	router := wo.New(eventFactoryFunc(), wo.ErrorHandler[*wo.Event](nil, nil, nil))
+//	loadWORoutes(router, githubAPI)
+//	benchmarkRoutes(b, w, githubAPI)
+//}
+//
+//func BenchmarkWOGplusAPI(b *testing.B) {
+//	router := wo.New(eventFactoryFunc(), wo.ErrorHandler[*wo.Event](nil, nil, nil))
+//	loadWORoutes(router, gplusAPI)
+//	benchmarkRoutes(b, w, gplusAPI)
+//}
+//
+//func BenchmarkWOParseAPI(b *testing.B) {
+//	router := wo.New(eventFactoryFunc(), wo.ErrorHandler[*wo.Event](nil, nil, nil))
+//	loadWORoutes(router, parseAPI)
+//	benchmarkRoutes(b, w, parseAPI)
+//}
+
+func loadStdRoutes(router *http.ServeMux, routes []*Route) {
+	for _, r := range routes {
+		p := re.ReplaceAllString(r.Path, `{$1}`)
+
+		switch r.Method {
+		case "GET":
+			router.HandleFunc("GET "+p, stdHandler(r.Method, p))
+		case "POST":
+			router.HandleFunc("POST "+p, stdHandler(r.Method, p))
+		case "PATCH":
+			router.HandleFunc("PATCH "+p, stdHandler(r.Method, p))
+		case "PUT":
+			router.HandleFunc("PUT "+p, stdHandler(r.Method, p))
+		case "DELETE":
+			router.HandleFunc("DELETE "+p, stdHandler(r.Method, p))
+		}
+	}
 }
 
-func BenchmarkWoolGitHubAPI(b *testing.B) {
-	w := wool.New()
-	loadWoolRoutes(w, githubAPI)
-	benchmarkRoutes(b, w, githubAPI)
+func stdHandler(method, path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}
 }
 
-func BenchmarkWoolGplusAPI(b *testing.B) {
-	w := wool.New()
-	loadWoolRoutes(w, gplusAPI)
-	benchmarkRoutes(b, w, gplusAPI)
-}
-
-func BenchmarkWoolParseAPI(b *testing.B) {
-	w := wool.New()
-	loadWoolRoutes(w, parseAPI)
-	benchmarkRoutes(b, w, parseAPI)
+func BenchmarkStdStatic(b *testing.B) {
+	mux := http.NewServeMux()
+	loadStdRoutes(mux, static)
+	benchmarkRoutes(b, mux, static)
 }
